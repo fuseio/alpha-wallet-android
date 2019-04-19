@@ -6,6 +6,7 @@ import org.w3c.dom.Document;
 import org.w3c.dom.NodeList;
 import sun.security.x509.KeyIdentifier;
 import sun.security.x509.X509CertImpl;
+import sun.security.x509.X509Key;
 
 import javax.security.auth.x500.X500Principal;
 import javax.xml.crypto.*;
@@ -13,11 +14,16 @@ import javax.xml.crypto.dsig.*;
 import javax.xml.crypto.dsig.dom.DOMValidateContext;
 import javax.xml.crypto.dsig.keyinfo.KeyInfo;
 import javax.xml.crypto.dsig.keyinfo.KeyName;
+import javax.xml.crypto.dsig.keyinfo.KeyValue;
 import javax.xml.crypto.dsig.keyinfo.X509Data;
+import java.math.BigInteger;
 import java.security.Key;
+import java.security.KeyException;
 import java.security.PublicKey;
 import java.security.cert.CertificateExpiredException;
 import java.security.cert.CertificateNotYetValidException;
+import java.security.interfaces.RSAPublicKey;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 
@@ -67,6 +73,10 @@ public class TSValidator {
         if (result.isValid)
         {
             KeyInfo kInfo = signature.getKeyInfo();
+            X509CertImpl cert = selectKeyData(kInfo.getContent());
+            result.issuerPrincipal = cert.getIssuerX500Principal().getName();
+            result.subjectPrincipal = cert.getSubjectX500Principal().getName();
+            result.keyType = cert.getSigAlgName();
 
             for (Object o : kInfo.getContent())
             {
@@ -74,14 +84,6 @@ public class TSValidator {
                 if (xmlStructure instanceof KeyName)
                 {
                     result.keyName = ((KeyName) xmlStructure).getName();
-                }
-                if (xmlStructure instanceof X509Data)
-                {
-                    List<X509CertImpl> certList = ((X509Data) xmlStructure).getContent();
-                    X509CertImpl cert = certList.get(certList.size() - 1);
-                    result.issuerPrincipal = cert.getIssuerX500Principal().getName();
-                    result.subjectPrincipal = cert.getSubjectX500Principal().getName();
-                    result.keyType = cert.getSigAlgName();
                 }
             }
         }
@@ -103,6 +105,65 @@ public class TSValidator {
         return result;
     }
 
+    protected static X509CertImpl selectKeyData(List list)
+    {
+        PublicKey recovered = null;
+        X509CertImpl cert = null;
+
+        for (int i = 0; i < list.size(); i++) {
+            XMLStructure xmlStructure = (XMLStructure) list.get(i);
+
+            if (xmlStructure instanceof KeyValue)
+            {
+                KeyValue kv = (KeyValue)xmlStructure;
+                try
+                {
+                    recovered = kv.getPublicKey();
+                }
+                catch (KeyException e)
+                {
+                    e.printStackTrace();
+                }
+            }
+            if (xmlStructure instanceof X509Data) {
+                List<X509CertImpl> certList = ((X509Data)xmlStructure).getContent();
+                cert = certList.get(certList.size() - 1);
+                for (X509CertImpl crt : certList)
+                {
+                    try
+                    {
+                        crt.checkValidity();
+                        if (recovered != null)
+                        {
+                            PublicKey certKey = crt.getPublicKey();
+                            if (Arrays.equals(recovered.getEncoded(), certKey.getEncoded()))
+                            {
+                                cert = crt;
+                            }
+                        }
+                        else
+                        {
+                            if (crt.getSigAlgName().equals("SHA256withECDSA"))
+                            {
+                                cert = crt;
+                            }
+                        }
+                    }
+                    catch (CertificateExpiredException e)
+                    {
+                        e.printStackTrace();
+                    }
+                    catch (CertificateNotYetValidException e)
+                    {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }
+
+        return cert;
+    }
+
     private static class CertKeySelector extends KeySelector {
         public KeySelectorResult select(KeyInfo keyInfo,
                                         KeySelector.Purpose purpose,
@@ -115,22 +176,24 @@ public class TSValidator {
             SignatureMethod sm = (SignatureMethod) method;
             List list = keyInfo.getContent();
 
-            for (int i = 0; i < list.size(); i++) {
-                XMLStructure xmlStructure = (XMLStructure) list.get(i);
-                X509CertImpl cert;
-                if (xmlStructure instanceof X509Data) {
-                    List<X509CertImpl> certList = ((X509Data)xmlStructure).getContent();
-                    cert = certList.get(certList.size()-1);
-                    try {
-                        cert.checkValidity();
-                    } catch (CertificateExpiredException e) {
-                        e.printStackTrace();
-                    } catch (CertificateNotYetValidException e) {
+            for (Object o : list)
+            {
+                XMLStructure xmlStructure = (XMLStructure) o;
+                if (xmlStructure instanceof KeyValue)
+                {
+                    KeyValue kv = (KeyValue) xmlStructure;
+                    try
+                    {
+                        return new SimpleKeySelectorResult(kv.getPublicKey());
+                    }
+                    catch (KeyException e)
+                    {
                         e.printStackTrace();
                     }
-                    return new SimpleKeySelectorResult(cert.getPublicKey());
                 }
             }
+            X509CertImpl cert = selectKeyData(list);
+            if (cert != null) return new SimpleKeySelectorResult(cert.getPublicKey());
             throw new KeySelectorException("No KeyValue element found!");
         }
     }

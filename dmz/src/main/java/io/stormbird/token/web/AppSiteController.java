@@ -481,7 +481,7 @@ public class AppSiteController {
         }
         catch (Exception e)
         {
-            // silent fail - just report signature check failed
+            e.printStackTrace();
         }
 
         return result;
