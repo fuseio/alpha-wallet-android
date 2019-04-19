@@ -1,14 +1,19 @@
 package io.stormbird.token.web;
 
-import io.stormbird.token.entity.MagicLinkInfo;
+import io.stormbird.token.entity.*;
+import io.stormbird.token.tools.TSValidator;
 import io.stormbird.token.tools.TokenDefinition;
 import io.stormbird.token.util.DateTimeFactory;
 import org.apache.commons.io.IOUtils;
+import org.json.simple.JSONArray;
+import org.json.simple.JSONObject;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.*;
 import org.springframework.boot.autoconfigure.*;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
@@ -22,17 +27,21 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import io.stormbird.token.entity.MagicLinkData;
-import io.stormbird.token.entity.NonFungibleToken;
-import io.stormbird.token.entity.SalesOrderMalformed;
+
 import io.stormbird.token.tools.ParseMagicLink;
 import io.stormbird.token.web.Ethereum.TransactionHandler;
 import io.stormbird.token.web.Service.CryptoFunctions;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import org.springframework.web.servlet.view.RedirectView;
+import org.w3c.dom.Document;
 import org.xml.sax.SAXException;
 import javax.servlet.http.HttpServletRequest;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+
 import static io.stormbird.token.tools.Convert.getEthString;
 import static io.stormbird.token.tools.Convert.getEthStringSzabo;
 import static io.stormbird.token.tools.ParseMagicLink.currencyLink;
@@ -174,6 +183,15 @@ public class AppSiteController {
             model.addAttribute("tokenAvailable", "available");
         }
         return "currency";
+    }
+
+    private void checkTokenDefinition(String address)
+    {
+//        try(FileInputStream in = new FileInputStream(xml)) {
+//            // TODO: give more detail in the error
+//            // TODO: reflect on this: should the page bail out for contracts with completely no matching XML?
+//            definition = new TokenDefinition(in, new Locale("en"), null);
+//        }
     }
 
     private String handleSpawnableLink(
@@ -405,5 +423,67 @@ public class AppSiteController {
         } else {
             throw new NoHandlerFoundException("GET", "/" + address, new HttpHeaders());
         }
+    }
+
+    @GetMapping("/checkSig")
+    @ResponseBody
+    public ResponseEntity<String> handleFileUpload(@RequestParam("file") MultipartFile file,
+                                                   RedirectAttributes redirectAttributes)
+    {
+        JSONArray holder = new JSONArray();
+
+        HttpStatus status = HttpStatus.ACCEPTED;
+        JSONObject result = new JSONObject();
+
+        try
+        {
+            SignatureCheck sigCheck = checkSignature(file);
+            if (sigCheck.isValid)
+            {
+                result.put("result", "pass");
+                result.put("issuer", sigCheck.issuerPrincipal);
+                result.put("subject", sigCheck.subjectPrincipal);
+                result.put("keyName", sigCheck.keyName);
+                result.put("keyType", sigCheck.keyType);
+            }
+            else
+            {
+                result.put("result", "fail");
+            }
+
+            holder.add(result);
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+            status = HttpStatus.BAD_REQUEST;
+        }
+
+        return new ResponseEntity<String>(result.toString(), status);
+    }
+
+    private SignatureCheck checkSignature(MultipartFile file)
+    {
+        SignatureCheck result = new SignatureCheck();
+        if (file.isEmpty())
+        {
+            return result;
+        }
+
+        try
+        {
+            DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+            dbFactory.setNamespaceAware(true);
+            DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
+            Document xml = dBuilder.parse(file.getInputStream());
+            xml.getDocumentElement().normalize();
+            result = TSValidator.check(xml);
+        }
+        catch (Exception e)
+        {
+            // silent fail - just report signature check failed
+        }
+
+        return result;
     }
 }
