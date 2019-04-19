@@ -27,35 +27,35 @@ API to validate signed tokenscript XML file.
 
 ### Endpoint:
 
-<code>http://stormbird.duckdns.org:8081/checkSig<code>
+`http://stormbird.duckdns.org:8081/checkSig`
   
 Use with Multipart file type eg:
 
-<code>curl -X GET http://stormbird.duckdns.org:8081/checkSig -H "cache-control: no-cache" -H "content-type: multipart/form-data;" -F "file=@xml/signed.xml"<code>
+`curl -X GET http://stormbird.duckdns.org:8081/checkSig -H "cache-control: no-cache" -H "content-type: multipart/form-data;" -F "file=@xml/signed.xml"`
   
 ## Result:
 
 on signature not valid:
 
-<code>{"result":"fail"}<code>
+`{"result":"fail"}`
 
 on signature valid:
 
-<code>{
+`{
     "result": "pass",
     "subject": "<X500 Subject description>",
     "keyName": "<Name of subject>",
     "keyType": "<Crypto Key spec>",
     "issuer": "<X500 Issuer description>"
-}<code>
+}`
 
 eg.
 
-<code>{
+`{
   "result":"pass",
   "subject":"CN=example.cn,OU=PositiveSSL,OU=Domain Control Validated",
   "keyName":"Jarvis",
   "keyType":"SHA256withECDSA",
   "issuer":"CN=COMODO ECC Domain Validation Secure Server CA,O=COMODO CA Limited,L=Dubbo,ST=NSW,C=AU"
-}<code>
+}`
 
