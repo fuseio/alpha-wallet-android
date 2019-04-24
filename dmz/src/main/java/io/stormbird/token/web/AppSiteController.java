@@ -1,6 +1,7 @@
 package io.stormbird.token.web;
 
 import io.stormbird.token.entity.*;
+import io.stormbird.token.tools.Numeric;
 import io.stormbird.token.tools.TSValidator;
 import io.stormbird.token.tools.TokenDefinition;
 import io.stormbird.token.util.DateTimeFactory;
@@ -23,8 +24,11 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.SecureRandom;
+import java.security.SignatureException;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -36,6 +40,8 @@ import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import org.springframework.web.servlet.view.RedirectView;
 import org.w3c.dom.Document;
+import org.web3j.crypto.Keys;
+import org.web3j.crypto.Sign;
 import org.xml.sax.SAXException;
 import javax.servlet.http.HttpServletRequest;
 import javax.xml.parsers.DocumentBuilder;
@@ -48,6 +54,7 @@ import static io.stormbird.token.tools.ParseMagicLink.currencyLink;
 import static io.stormbird.token.tools.ParseMagicLink.spawnable;
 
 
+@CrossOrigin(origins= {"*"}, maxAge = 4800, allowCredentials = "false" )
 @Controller
 @SpringBootApplication
 @RequestMapping("/")
@@ -55,6 +62,13 @@ public class AppSiteController {
 
     private static CryptoFunctions cryptoFunctions = new CryptoFunctions();
     private static Map<String, File> addresses;
+    private static Map<String, String> signatures;
+    private static String lastChallenge = "";
+    private static long challengeTime = 0;
+    private static long doorOpenTime = 0;
+    private static String statusString = "Door Closed";
+    private static long statusTime = 0;
+
     private static final String appleAssociationConfig = "{\n" +
             "  \"applinks\": {\n" +
             "    \"apps\": [],\n" +
@@ -67,6 +81,10 @@ public class AppSiteController {
             "  }\n" +
             "}";
     private final MagicLinkData magicLinkData = new MagicLinkData();
+    private TransactionHandler queryTxHandler;
+
+    private static final String EMPTY = "EMPTY";
+    public static final String PERSONAL_MESSAGE_PREFIX = "\u0019Ethereum Signed Message:\n";
 
     @GetMapping(value = "/apple-app-site-association", produces = "application/json")
     @ResponseBody
@@ -74,10 +92,10 @@ public class AppSiteController {
         return appleAssociationConfig;
     }
 
-    @GetMapping("/")
-    public RedirectView home(RedirectAttributes attributes){
-        return new RedirectView("http://alphawallet.com");
-    }
+//    @GetMapping("/")
+//    public RedirectView home(RedirectAttributes attributes){
+//        return new RedirectView("http://alphawallet.com");
+//    }
 
     @GetMapping(value = "/{UniversalLink}")
     public String handleUniversalLink(
@@ -366,6 +384,7 @@ public class AppSiteController {
 
     public static void main(String[] args) throws IOException { // TODO: should run System.exit() if IOException
         SpringApplication.run(AppSiteController.class, args);
+        signatures = new ConcurrentHashMap<>();
         try (Stream<Path> dirStream = Files.walk(repoDir)) {
             addresses = dirStream.filter(path -> path.toString().toLowerCase().endsWith(".xml"))
                     .filter(Files::isRegularFile)
@@ -425,7 +444,7 @@ public class AppSiteController {
         }
     }
 
-    @GetMapping("/checkSig")
+    @GetMapping("/api/checkSig")
     @ResponseBody
     public ResponseEntity<String> handleFileUpload(@RequestParam("file") MultipartFile file,
                                                    RedirectAttributes redirectAttributes)
@@ -485,5 +504,148 @@ public class AppSiteController {
         }
 
         return result;
+    }
+
+    @GetMapping(value = "/")
+    public String doorSite(Model model, HttpServletRequest request)
+    {
+        model.addAttribute("title", "TokenScript Door Challenge Simulator");
+        model.addAttribute("challenge", lastChallenge);
+        String doorGraphic = "images/closedDoor.jpg";
+        if (doorOpenTime > 0)
+        {
+            if ((System.currentTimeMillis() - doorOpenTime) > 1000 * 15)
+            {
+                doorOpenTime = 0;
+                statusString = "Door Closed";
+            }
+            else
+            {
+                doorGraphic = "images/front door open.jpg";
+            }
+        }
+        model.addAttribute("image", doorGraphic);
+        model.addAttribute("status", statusString);
+        return "doorchallenge";
+    }
+
+    private static final String[] seedWords = { "Apples", "Oranges", "Grapes", "Dragon fruit", "Bread fruit", "Pomegranate", "Mangifera indica", "Persea americana", "Falafel" };
+
+    @RequestMapping(value = "/api/getChallenge", method = RequestMethod.GET)
+    public ResponseEntity getChallenge(
+
+    )
+    {
+        byte[] bytes = new byte[256];
+        SecureRandom random = new SecureRandom();
+        random.nextBytes(bytes);
+        BigInteger bi = new BigInteger(bytes);
+        String addend = bi.toString(16).substring(0,9);
+        random.nextBytes(bytes);
+        bi = new BigInteger(bytes);
+        int index = bi.mod(BigInteger.valueOf(seedWords.length)).intValue();
+        String challenge = seedWords[index] + "-" + addend;
+        signatures.put(challenge, EMPTY);
+        lastChallenge = challenge;
+        challengeTime = System.currentTimeMillis();
+        statusString = "Issue Challenge";
+        return new ResponseEntity<>(challenge, HttpStatus.ACCEPTED);
+    }
+
+    @RequestMapping(value = "/api/checkSignature", method = RequestMethod.GET)
+    public ResponseEntity checkSignature(
+            @RequestParam(value="contract") String contractAddress,
+            @RequestParam(value="challenge") String challenge,
+            @RequestParam(value="sig") String signature)
+    {
+        HttpStatus callStatus = HttpStatus.ACCEPTED;
+        String result = "fail";
+        System.out.println("Checking: " + challenge + " @" + contractAddress);
+        lastChallenge = "";
+        //first check this is a valid challenge
+        String check = signatures.get(challenge);
+        if (check != null && check.equals(EMPTY))
+        {
+            //check signature
+            String address = ecRecoverPersonal(challenge, signature);
+            System.out.println("Recovered: " + address);
+            if (queryTxHandler == null) queryTxHandler = new TransactionHandler(3);
+            //check this address for a token
+            if (queryTxHandler.checkBalance(address, 3, contractAddress))
+            {
+                System.out.println("has token");
+                result = "pass";
+                signatures.put(challenge, signature);
+                callStatus = HttpStatus.ACCEPTED;
+                statusString = "Door opening ...";
+                doorOpenTime = System.currentTimeMillis();
+            }
+            else
+            {
+                System.out.println("doesn't have any tokens");
+                result = "no token";
+                statusString = "Failed Token Check";
+            }
+        }
+
+        statusTime = System.currentTimeMillis();
+
+        return new ResponseEntity<>(result, callStatus);
+    }
+
+    public String ecRecover(String challenge, String signature)
+    {
+        //reconstruct Signature from hex
+        Sign.SignatureData sigData = sigFromByteArray(Numeric.hexStringToByteArray(signature));
+        String recoveredAddr = "0x";
+
+        try
+        {
+            BigInteger recoveredKey = Sign.signedMessageToKey(challenge.getBytes(), sigData);
+            recoveredAddr = "0x" + Keys.getAddress(recoveredKey);
+            System.out.println("Recovered: " + recoveredAddr);
+        }
+        catch (SignatureException e)
+        {
+            e.printStackTrace();
+        }
+        return recoveredAddr;
+    }
+
+    public static Sign.SignatureData sigFromByteArray(byte[] sig)
+    {
+        byte subv = sig[64];
+        if (subv < 27) subv += 27;
+
+        byte[] subrRev = Arrays.copyOfRange(sig, 0, 32);
+        byte[] subsRev = Arrays.copyOfRange(sig, 32, 64);
+
+        BigInteger r = new BigInteger(1, subrRev);
+        BigInteger s = new BigInteger(1, subsRev);
+
+        return new Sign.SignatureData(subv, subrRev, subsRev);
+    }
+
+    public String ecRecoverPersonal(String message, String sig)
+    {
+        String prefix = PERSONAL_MESSAGE_PREFIX + message.length();
+        byte[] msgHash = (prefix + message).getBytes();
+
+        byte[] signatureBytes = Numeric.hexStringToByteArray(sig);
+        Sign.SignatureData sd = sigFromByteArray(signatureBytes);
+        String addressRecovered = "";
+
+        try
+        {
+            BigInteger recoveredKey = Sign.signedMessageToKey(msgHash, sd);
+            addressRecovered = "0x" + Keys.getAddress(recoveredKey);
+            System.out.println("Recovered: " + addressRecovered);
+        }
+        catch (SignatureException e)
+        {
+            e.printStackTrace();
+        }
+
+        return addressRecovered;
     }
 }

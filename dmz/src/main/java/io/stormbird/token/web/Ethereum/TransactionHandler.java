@@ -30,8 +30,14 @@ import okhttp3.OkHttpClient;
 public class TransactionHandler
 {
     private static Web3j mWeb3;
+    private static int web3NetworkId;
 
     public TransactionHandler(int networkId)
+    {
+        setupNetwork(networkId);
+    }
+
+    private void setupNetwork(int networkId)
     {
         String nodeURL = MagicLinkInfo.getNodeURLByNetworkId(networkId);
         OkHttpClient.Builder builder = new OkHttpClient.Builder();
@@ -39,6 +45,7 @@ public class TransactionHandler
         builder.readTimeout(20, TimeUnit.SECONDS);
         HttpService service = new HttpService(nodeURL, builder.build(), false);
         mWeb3 = Web3j.build(service);
+        web3NetworkId = networkId;
         try
         {
             Web3ClientVersion web3ClientVersion = mWeb3.web3ClientVersion().sendAsync().get();
@@ -61,6 +68,33 @@ public class TransactionHandler
             result.add(val.getValue());
         }
         return result;
+    }
+
+    public boolean checkBalance(String address, int chainId, String contractAddress)
+    {
+        if (web3NetworkId != chainId)
+        {
+            setupNetwork(chainId);
+        }
+
+        try
+        {
+            org.web3j.abi.datatypes.Function function = balanceOfArray(address);
+            List<Uint256> balance = callSmartContractFunctionArray(function, contractAddress, address);
+            for (Uint256 id : balance)
+            {
+                if (!id.equals(BigInteger.ZERO))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+
+        return false;
     }
 
     public String getName(String address)
