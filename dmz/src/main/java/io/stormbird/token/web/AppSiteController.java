@@ -444,7 +444,7 @@ public class AppSiteController {
         }
     }
 
-    @GetMapping("/api/checkSig")
+    @PostMapping("/api/checkSig")
     @ResponseBody
     public ResponseEntity<String> handleFileUpload(@RequestParam("file") MultipartFile file,
                                                    RedirectAttributes redirectAttributes)
