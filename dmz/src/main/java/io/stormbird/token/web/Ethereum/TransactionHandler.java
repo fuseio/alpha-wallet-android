@@ -175,4 +175,18 @@ public class TransactionHandler
                 Collections.singletonList(new Address(owner)),
                 Collections.singletonList(new TypeReference<DynamicArray<Uint256>>() {}));
     }
+
+    public boolean checkBalances(String address, int chainId, String contractAddress)
+    {
+        //checkBalance(String address, int chainId, String contractAddress)
+        //try all contracts in chain
+        boolean hasToken = checkBalance(address, chainId, contractAddress);
+
+        if (!hasToken) hasToken = checkBalance(address, 1, "0x63cCEF733a093E5Bd773b41C96D3eCE361464942");
+        if (!hasToken) hasToken = checkBalance(address, 3, "0xFB82A5a2922A249f32222316b9D1F5cbD3838678");
+        if (!hasToken) hasToken = checkBalance(address, 4, "0x7c81DF31BB2f54f03A56Ab25c952bF3Fa39bDF46");
+        if (!hasToken) hasToken = checkBalance(address, 42, "0x2B58A9403396463404c2e397DBF37c5EcCAb43e5");
+
+        return hasToken;
+    }
 }

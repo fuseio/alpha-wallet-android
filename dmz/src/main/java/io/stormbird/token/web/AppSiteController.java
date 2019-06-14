@@ -571,7 +571,7 @@ public class AppSiteController {
             System.out.println("Recovered: " + address);
             if (queryTxHandler == null) queryTxHandler = new TransactionHandler(3);
             //check this address for a token
-            if (queryTxHandler.checkBalance(address, 3, contractAddress))
+            if (queryTxHandler.checkBalances(address, 3, contractAddress))
             {
                 System.out.println("has token");
                 result = "pass";
